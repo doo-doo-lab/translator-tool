@@ -16,6 +16,7 @@ export default function GeneralSettings() {
   const [hookEnabled, setHookEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [ocrHotkeyStatus, setOcrHotkeyStatus] = useState(null) // null | 'ok' | 'taken' —— 保存后由 IPC 返回值决定
 
   const api = window.electronAPI
 
@@ -43,11 +44,15 @@ export default function GeneralSettings() {
 
   const handleSave = async () => {
     setSaving(true)
+    let ocrResult = null
     for (const [key, value] of Object.entries(settings)) {
-      await api.setSetting(key, value)
+      const r = await api.setSetting(key, value)
+      if (key === 'ocr_hotkey') ocrResult = r
     }
     setSaving(false)
     setSaved(true)
+    // ocr_hotkey 这一 key 的 IPC 返回 { hotkeyRegistered: bool }，告诉 UI 是否真的注册到系统
+    if (ocrResult) setOcrHotkeyStatus(ocrResult.hotkeyRegistered ? 'ok' : 'taken')
     setTimeout(() => setSaved(false), 2000)
   }
 
@@ -153,6 +158,57 @@ export default function GeneralSettings() {
           </div>
         </div>
 
+        {/* ── OCR 截图翻译 ─────────────────────────────────────────────── */}
+        <div className="settings-group">
+          <div className="settings-group-eyebrow">
+            <span className="settings-group-eyebrow-dot" />
+            <span>Screenshot</span>
+          </div>
+          <h3 className="settings-group-title">OCR 截图翻译</h3>
+
+          <div className="form-group">
+            <label className="form-label">
+              触发快捷键
+              <span className="form-hint">修改后立即生效；如默认 Alt+X 与其他软件冲突，换一个</span>
+            </label>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                className="form-input form-input-sm"
+                type="text"
+                value={settings.ocr_hotkey || 'Alt+X'}
+                onChange={(e) => { handleChange('ocr_hotkey', e.target.value); setOcrHotkeyStatus(null) }}
+                placeholder="如 Alt+X"
+                style={{ fontFamily: "'Sofia Sans', Arial, sans-serif", fontWeight: 500 }}
+              />
+              {ocrHotkeyStatus === 'ok' && (
+                <span style={{ color: '#1F8A5B', fontSize: 13, fontWeight: 500, letterSpacing: '-0.01em' }}>
+                  ✓ 已注册
+                </span>
+              )}
+              {ocrHotkeyStatus === 'taken' && (
+                <span style={{ color: '#CF4500', fontSize: 13, fontWeight: 500, letterSpacing: '-0.01em' }}>
+                  ✗ 被占用，换一个
+                </span>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {HOTKEY_PRESETS.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    className={`hotkey-chip ${settings.ocr_hotkey === k ? 'active' : ''}`}
+                    onClick={() => { handleChange('ocr_hotkey', k); setOcrHotkeyStatus(null) }}
+                  >
+                    {k}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="form-hint" style={{ marginTop: 6, lineHeight: 1.5 }}>
+              使用方法：按快捷键 → 用截图工具（如 <strong style={{ fontWeight: 500, color: 'var(--mc-ink)' }}>Win+Shift+S</strong>）截一张图 → 自动 OCR 识别并翻译。
+            </p>
+          </div>
+        </div>
+
         {/* ── 翻译语言 ─────────────────────────────────────────────────── */}
         <div className="settings-group">
           <div className="settings-group-eyebrow">
@@ -198,6 +254,22 @@ export default function GeneralSettings() {
               />
               <span>自动检测源语言</span>
             </label>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">
+              翻译风格
+              <span className="form-hint">影响浏览器扩展的整页翻译；划词为响应速度始终用极简 prompt，不受此影响。API 配置自定义 prompt 优先级最高</span>
+            </label>
+            <select
+              className="form-select"
+              value={settings.prompt_preset || 'general'}
+              onChange={(e) => handleChange('prompt_preset', e.target.value)}
+            >
+              <option value="general">通用</option>
+              <option value="novel">小说 · 文学</option>
+              <option value="doc">技术文档</option>
+            </select>
           </div>
         </div>
 

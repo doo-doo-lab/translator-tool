@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWordbook: ()      => ipcRenderer.invoke('db:getWordbook'),
   addWord:     (entry) => ipcRenderer.invoke('db:addWord', entry),
   deleteWord:  (id)    => ipcRenderer.invoke('db:deleteWord', id),
+  resetWord:   (id)    => ipcRenderer.invoke('db:resetWord', id),
 
   // ── 术语表 ────────────────────────────────────────────────────────────────
   getGlossary:        ()          => ipcRenderer.invoke('db:getGlossary'),
@@ -38,6 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── 弹窗（供弹窗页面自身调用）────────────────────────────────────────────
   closePopup:    ()         => ipcRenderer.invoke('popup:close'),
   pinPopup:      (pinned)   => ipcRenderer.invoke('popup:pin', pinned),
+  setPopupSize:  (h, w)     => ipcRenderer.invoke('popup:setSize', h, w),
 
   // ── 词典 / 翻译（渲染进程直调）──────────────────────────────────────────
   lookupWord:     (word) => ipcRenderer.invoke('dict:lookup', word),
@@ -57,6 +59,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onHookStatusChanged: (fn) => {
     ipcRenderer.on('hook:statusChanged', (_, enabled) => fn(enabled))
     return () => ipcRenderer.removeAllListeners('hook:statusChanged')
+  },
+
+  // 主进程主动切设置页 tab（SRS 通知点击 → 'wordbook'、托盘菜单 → 任意）
+  onSetTab: (fn) => {
+    ipcRenderer.on('settings:setTab', (_, id) => fn(id))
+    return () => ipcRenderer.removeAllListeners('settings:setTab')
   },
 
   // ── 工具 ──────────────────────────────────────────────────────────────────

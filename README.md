@@ -10,7 +10,7 @@
 
 ### 1️⃣ 下载并安装桌面端
 
-1. 进入项目的 [**Releases 页面**](https://github.com/akira17189-create/translator-tool/releases)
+1. 进入项目的 [**Releases 页面**](https://github.com/doo-doo-lab/translator-tool/releases)
 2. 下载最新的 `翻译工具 Setup x.x.x.exe`
 3. 双击运行
 4. **会弹「Windows 已保护你的电脑」** —— 因为我没买代码签名证书。点：
@@ -67,7 +67,7 @@ GLM-4-Flash 适合翻译大段，但划词要响应快，所以再加一条快�
 
 > 桌面端的划词只是弹一个小窗。如果你想读整页英文，需要装浏览器扩展实现「英文 + 中文上下行对照」。
 
-1. 进 [**Releases 页面**](https://github.com/akira17189-create/translator-tool/releases) 下载最新的 `extension.zip`
+1. 进 [**Releases 页面**](https://github.com/doo-doo-lab/translator-tool/releases) 下载最新的 `extension.zip`
 2. 解压到任意目录（**别删了，扩展靠这个目录跑**，比如解压到 `D:\翻译工具扩展\`）
 3. Chrome / Edge 浏览器地址栏输入：`chrome://extensions/`
 4. 右上角打开「**开发者模式**」

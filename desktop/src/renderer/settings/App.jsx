@@ -2,14 +2,26 @@ import React, { useState, useEffect } from 'react'
 import ApiConfigSection from './components/ApiConfigSection.jsx'
 import GeneralSettings from './components/GeneralSettings.jsx'
 import TitleBar from './components/TitleBar.jsx'
+import WordbookApp from '../wordbook/index.jsx'
+import GlossaryApp from '../glossary/index.jsx'
 
 const NAV = [
-  { id: 'api',     label: 'API 配置' },
-  { id: 'general', label: '通用设置' },
+  { id: 'api',      label: 'API 配置' },
+  { id: 'general',  label: '通用设置' },
+  { id: 'wordbook', label: '生词本' },
+  { id: 'glossary', label: '术语表' },
 ]
 
 export default function App() {
   const [tab, setTab] = useState('api')
+
+  // 监听主进程切 tab 指令（SRS 通知点击 / 托盘菜单等会触发）
+  useEffect(() => {
+    const off = window.electronAPI?.onSetTab?.((id) => {
+      if (NAV.some((n) => n.id === id)) setTab(id)
+    })
+    return () => { off?.() }
+  }, [])
   const [serverStatus, setServerStatus] = useState('checking')
 
   useEffect(() => {
@@ -62,9 +74,17 @@ export default function App() {
 
       {/* ── Main ────────────────────────────────────────────────────────── */}
       <div className="main-wrap">
-        <main className="main-content">
-          {tab === 'api'     && <ApiConfigSection />}
-          {tab === 'general' && <GeneralSettings />}
+        <main className={`main-content ${(tab === 'wordbook' || tab === 'glossary') ? 'main-content--bleed' : ''}`}>
+          {tab === 'api'      && <ApiConfigSection />}
+          {tab === 'general'  && <GeneralSettings />}
+          {/* 生词本 / 术语表是「全自由布局」页（自带 padding/背景/footer），
+              main-content--bleed 把父 padding 归 0，embedded-view 让子撑满 */}
+          {tab === 'wordbook' && (
+            <div className="embedded-view"><WordbookApp embedded /></div>
+          )}
+          {tab === 'glossary' && (
+            <div className="embedded-view"><GlossaryApp embedded /></div>
+          )}
         </main>
 
         <div className="status-bar">

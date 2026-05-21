@@ -1,5 +1,5 @@
 // content/bilingual.js
-// Exports window.ttBilingual = { init, destroy, retryAll, setHover }
+// Exports window.ttBilingual = { init, destroy, retryAll, setDisplayMode }
 // Injects Chinese translation paragraphs below English paragraphs in-page.
 // Improvements:
 //   - Loading spinner shown per-paragraph while translation is pending
@@ -114,8 +114,6 @@
 
   let intersectionObs = null;
   let mutationObs     = null;
-  let hoverEnabled    = false;
-  let hoverTarget     = null;
 
   // ─── Batched translation queue ───────────────────────────────────────
   // pendingBatch holds <p> elements waiting to be sent. flushBatch() takes
@@ -239,10 +237,16 @@
     const texts = batch.map(el => (el.innerText || '').trim());
     const prompt = buildBatchPrompt(texts);
 
+    // Page title as context — translate.js prepends it as "上下文：..." so
+    // the LLM has the page's subject when disambiguating (novel about cooking
+    // → 烹饪相关译法). Cheap to include, no per-genre prompt logic needed.
+    const pageTitle = (document.title || '').trim().slice(0, 200);
+    const pageContext = pageTitle ? `页面标题：${pageTitle}` : '';
+
     inFlight++;
     try {
       chrome.runtime.sendMessage(
-        { type: 'TRANSLATE', text: prompt, mode: 'paragraph' },
+        { type: 'TRANSLATE', text: prompt, mode: 'paragraph', context: pageContext },
         resp => {
           inFlight--;
           handleBatchResponse(batch, resp);
@@ -639,23 +643,6 @@
     });
   }
 
-  // ─── Hover + Ctrl key to translate ───────────────────────────────────
-  function onMouseOver(e) {
-    const el = e.target.closest('p');
-    if (el) hoverTarget = el;
-  }
-
-  function onKeyDown(e) {
-    if (!hoverEnabled) return;
-    if (e.ctrlKey && e.key === "'") {
-      e.preventDefault();
-      if (hoverTarget && hoverTarget.getAttribute(DATA_ATTR) !== '1') {
-        hoverTarget.removeAttribute(DATA_RETRY);
-        translateParagraph(hoverTarget);
-      }
-    }
-  }
-
   // ─── Public API ───────────────────────────────────────────────────────
   function init() {
     if (intersectionObs) return;
@@ -678,18 +665,11 @@
       observeAll();
     });
     mutationObs.observe(document.body, { childList: true, subtree: true });
-
-    document.addEventListener('mouseover', onMouseOver);
-    document.addEventListener('keydown', onKeyDown);
   }
 
   function destroy() {
     if (intersectionObs) { intersectionObs.disconnect(); intersectionObs = null; }
     if (mutationObs)     { mutationObs.disconnect();     mutationObs     = null; }
-
-    document.removeEventListener('mouseover', onMouseOver);
-    document.removeEventListener('keydown', onKeyDown);
-    hoverTarget = null;
 
     document.querySelectorAll('.' + BILINGUAL_CLASS).forEach(el => el.remove());
     document.querySelectorAll('.' + SPINNER_CLASS).forEach(el => el.remove());
@@ -722,8 +702,6 @@
     });
   }
 
-  function setHover(enabled) { hoverEnabled = !!enabled; }
-
   function setDisplayMode(mode) {
     const next = mode === 'replace' ? 'replace' : 'bilingual';
     try { console.log('[tt-bilingual] setDisplayMode', { from: displayMode, to: next, requested: mode }); } catch (_) {}
@@ -732,5 +710,5 @@
     applyDisplayMode();
   }
 
-  window.ttBilingual = { init, destroy, retryAll, setHover, setDisplayMode };
+  window.ttBilingual = { init, destroy, retryAll, setDisplayMode };
 })();

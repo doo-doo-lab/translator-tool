@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { createRoot } from 'react-dom/client'
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -43,8 +43,16 @@ const SpeakerIcon = () => (
 const ps = {
   shell: {
     width:'100%', height:'100%', background:C.cream, fontFamily:FONT, color:C.ink,
-    overflow:'hidden', position:'relative', display:'flex', flexDirection:'column',
-    animation:'tp-rise 0.2s ease-out both', WebkitAppRegion:'drag', userSelect:'none',
+    // 内容超 window 高度时由 shell 自己滚动；footer 用 sticky 贴底永远可见
+    overflow:'auto', position:'relative', display:'flex', flexDirection:'column',
+    // 关键：no-drag 否则 webkit drag 区会吞掉鼠标滚轮事件（用户在原文区滚不动）
+    // 拖动靠下面单独的 dragHandle 细条；userSelect:text 让用户能复制原文/译文
+    animation:'tp-rise 0.2s ease-out both', WebkitAppRegion:'no-drag', userSelect:'text',
+  },
+  dragHandle: {
+    // popup 顶部一条不可见的拖拽手柄（避开右上 topActions 按钮区）
+    position:'absolute', top:0, left:0, right:80, height:18,
+    WebkitAppRegion:'drag', zIndex:1, cursor:'move',
   },
   topActions: {
     position:'absolute', top:14, right:14, display:'flex', gap:7, zIndex:2, WebkitAppRegion:'no-drag',
@@ -94,11 +102,12 @@ const ps = {
   },
   defsList: {
     listStyle:'none', padding:'14px 24px 4px', display:'flex', flexDirection:'column', gap:8,
-    flex:1, overflow:'auto', WebkitAppRegion:'no-drag', userSelect:'text',
+    // 不再 flex:1 抢空间 / 不再内滚 —— 让译文自然展开撑高，由外层 shell 整体滚动
+    WebkitAppRegion:'no-drag', userSelect:'text',
   },
   defRow: {
     display:'flex', alignItems:'flex-start', gap:10,
-    fontSize:14, fontWeight:450, letterSpacing:'-0.01em', color:C.ink, lineHeight:1.45,
+    fontSize:13.5, fontWeight:450, letterSpacing:'-0.01em', color:C.ink, lineHeight:1.55,
   },
   defBullet: { width:5, height:5, borderRadius:'50%', background:C.orange, marginTop:8, flexShrink:0 },
   noticeBar: {
@@ -110,6 +119,8 @@ const ps = {
     background:C.ink, color:C.white, padding:'13px 16px',
     display:'flex', alignItems:'center', gap:8,
     WebkitAppRegion:'no-drag', flexShrink:0,
+    // sticky 贴底：内容很长用户滚动时按钮始终可见，不用滚到最底
+    position:'sticky', bottom:0, zIndex:2,
   },
   primaryBtn: {
     flex:1, background:C.ink, color:C.cream, border:`1.5px solid ${C.cream}`,
@@ -142,11 +153,14 @@ function TopActions({ pinned, onPin, onClose }) {
   )
 }
 
-function LoadingBody({ query }) {
+function LoadingBody({ query, label }) {
+  // 跟 ReadyBody 用一致的字号策略：短词 24pt / 长句 17pt
+  // 否则 loading → ready 时字号会跳变
+  const isShort = (query?.length || 0) < 30
   return (
     <div style={ps.loadingBody}>
-      <div style={ps.loadingLabel}><span style={ps.eyebrowDot} /><span>查询中</span></div>
-      <div style={ps.loadingWord}>{query?.length > 50 ? query.slice(0, 50) + '…' : query || '…'}</div>
+      <div style={ps.loadingLabel}><span style={ps.eyebrowDot} /><span>{label || '查询中'}</span></div>
+      <div style={{ ...ps.loadingWord, fontSize: isShort ? 24 : 17, lineHeight: isShort ? 1.1 : 1.5 }}>{query || '…'}</div>
       <div style={ps.progressTrack}><div style={ps.progressBar} /></div>
     </div>
   )
@@ -160,7 +174,8 @@ function ReadyBody({ uiData, added, adding, onAdd, onSpeak }) {
   return (
     <>
       <div style={ps.readyTop}>
-        <div style={ps.word}>{word}</div>
+        {/* 短词（< 30 字符）保留 26pt 大气派；长句压到 17pt 不占地方 */}
+        <div style={{ ...ps.word, fontSize: (word?.length || 0) < 30 ? 26 : 17, lineHeight: (word?.length || 0) < 30 ? 1.1 : 1.5 }}>{word}</div>
         {phonetic && <div style={ps.phonetic}>{phonetic}</div>}
         {exchange && Object.keys(exchange).length > 0 && (
           <div style={ps.exchangeRow}>
@@ -222,16 +237,50 @@ function PopupApp() {
   const [pinned, setPinned] = useState(false)
   const [added, setAdded]   = useState(false)
   const [adding, setAdding] = useState(false)
+  const shellRef            = useRef(null)
 
   useEffect(() => {
-    const removeLoading = window.electronAPI?.onPopupLoading(({ text }) => {
-      setState('loading'); setData({ text }); setAdded(false)
+    const removeLoading = window.electronAPI?.onPopupLoading(({ text, label }) => {
+      setState('loading'); setData({ text, label }); setAdded(false)
     })
     const removeData = window.electronAPI?.onPopupData((payload) => {
       setData(payload); setState('ready')
     })
     return () => { removeLoading?.(); removeData?.() }
   }, [])
+
+  // 内容渲染完后量真实 DOM 高度，反馈给主进程 setSize。
+  // 同时根据高度推算宽度：内容多就加宽，减少用户竖滚距离。
+  //
+  // 关键：setSize 改了窗口尺寸 → layout 重排 → shell.scrollHeight 变化（比如 360 宽
+  // 下 800 高的内容，720 宽下可能只要 500 高）。useLayoutEffect 本身不会再 fire（依赖
+  // 没变），所以监听 window.resize（Electron setSize 会触发它）重新 measure 直到稳定。
+  // lastSent 记录已上报值，差距 < 4px 视为收敛、停止上报，避免抖动。
+  useLayoutEffect(() => {
+    if (state === 'idle') return
+    let lastSent = { h: 0, w: 0 }
+
+    const measure = () => {
+      const shell = shellRef.current
+      if (!shell) return
+      const h = shell.scrollHeight
+      // 高度阈值 → 目标宽度。横宽比竖滚体感好很多 —— 阈值激进点
+      let targetW = 360
+      if (h > 380) targetW = 480
+      if (h > 540) targetW = 600
+      if (h > 700) targetW = 720
+      if (Math.abs(h - lastSent.h) < 4 && targetW === lastSent.w) return  // 收敛
+      lastSent = { h, w: targetW }
+      window.electronAPI?.setPopupSize?.(h, targetW)
+    }
+
+    const id = requestAnimationFrame(measure)
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(id)
+      window.removeEventListener('resize', measure)
+    }
+  }, [state, data, pinned, added])
 
   const handleClose = useCallback(() => {
     window.electronAPI?.closePopup(); setState('idle')
@@ -277,7 +326,7 @@ function PopupApp() {
       ? dict.definitions.map(d => d.def)
       : []
     return {
-      word:        isSingleWord ? (dict?.word || text) : (text?.length > 50 ? text.slice(0, 50) + '…' : text),
+      word:        isSingleWord ? (dict?.word || text) : text,
       phonetic:    isSingleWord ? dict?.phonetic : null,
       exchange:    isSingleWord ? dict?.exchange : null,
       pos:         isSingleWord
@@ -290,9 +339,10 @@ function PopupApp() {
   })()
 
   return (
-    <div style={ps.shell} data-state={state}>
+    <div ref={shellRef} style={ps.shell} data-state={state}>
+      <div style={ps.dragHandle} aria-hidden="true" />
       <TopActions pinned={pinned} onPin={handlePin} onClose={handleClose} />
-      {state === 'loading' && <LoadingBody query={data?.text} />}
+      {state === 'loading' && <LoadingBody query={data?.text} label={data?.label} />}
       {state === 'ready'   && <ReadyBody uiData={uiData} added={added} adding={adding} onAdd={handleAdd} onSpeak={handleSpeak} />}
     </div>
   )
@@ -307,8 +357,11 @@ styleEl.textContent = `
     0%{left:-40%;width:40%} 50%{left:30%;width:50%} 100%{left:100%;width:40%}
   }
   *{box-sizing:border-box} body{margin:0;background:#F3F0EE;overflow:hidden}
-  ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-track{background:transparent}
-  ::-webkit-scrollbar-thumb{background:rgba(20,20,19,0.15);border-radius:999px}
+  /* 加宽到 8px 让长内容时 scrollbar 好拉；hover 时颜色变深 */
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(20,20,19,0.18);border-radius:999px;border:2px solid #F3F0EE}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(20,20,19,0.38)}
   button:focus-visible{outline:2px solid #F37338;outline-offset:2px}
 `
 document.head.appendChild(styleEl)

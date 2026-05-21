@@ -1,11 +1,11 @@
-import { app, BrowserWindow, Menu, ipcMain, shell, screen, nativeImage } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, shell, screen, nativeImage, Notification } from 'electron'
 import { join } from 'path'
 import {
   initDatabase,
   getApiConfigs, addApiConfig, updateApiConfig, deleteApiConfig, setActiveConfig,
   getSelectionApiId, setSelectionApiConfig,
   getSettings, setSetting,
-  addWordToWordbook, deleteWordFromWordbook, getWordbook,
+  addWordToWordbook, deleteWordFromWordbook, getWordbook, resetWord,
   getGlossary, addGlossaryTerm, updateGlossaryTerm, deleteGlossaryTerm,
 } from './database.js'
 import { startServer, stopServer } from './server.js'
@@ -13,6 +13,8 @@ import { setupTray } from './tray.js'
 import { initDictionary, lookupWord } from './dictionary.js'
 import { initGlobalHook, enableHook, disableHook, isHookEnabled, updateHotkey, destroyGlobalHook, setAutoSelect } from './globalHook.js'
 import { translate, buildChatCompletionsUrl } from './translate.js'
+import { initOcr, triggerOcrCapture, destroyOcr, updateOcrHotkey, getCurrentHotkey } from './ocr.js'
+import { initSrs, destroySrs } from './srs.js'
 
 let mainWindow = null
 let popupWindow = null
@@ -89,8 +91,8 @@ function createPopupWindow() {
     width: 360,
     height: 260,
     minWidth: 280,
-    maxWidth: 480,
-    maxHeight: 520,
+    maxWidth: 720,   // 上限放宽：长原文/译文时 renderer 会请求加宽减少竖滚
+    maxHeight: 720,
     frame: false,
     transparent: false,
     alwaysOnTop: true,
@@ -176,11 +178,51 @@ async function showPopup({ text, x, y }) {
   }
 
   popupWindow.webContents.send('popup:data', payload)
+  // 高度不再在这里估算 —— 由 renderer 收到 data 后量真实 DOM scrollHeight，
+  // 通过 popup:setSize IPC 反馈过来精确 setSize（解决长原文+长译文截断）
+}
 
-  // 根据内容自动调整高度
-  const hasDict = dictData?.found && dictData?.definitions?.length > 0
-  const newH = hasDict ? Math.min(420, winH + dictData.definitions.length * 22 + 80) : winH
-  popupWindow.setSize(winW, newH)
+// ─── 显示主窗口并切到指定 tab（SRS 通知点击 / 托盘菜单都走这） ────────────
+
+function showMainWindowAtTab(tabId) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.show()
+  mainWindow.focus()
+  // 等渲染进程就绪后发；通常窗口已加载过，立即可送。
+  // 重复调也无害，渲染端收到自己当前 tab id 是 no-op。
+  mainWindow.webContents.send('settings:setTab', tabId)
+}
+
+// ─── OCR 占位 popup ──────────────────────────────────────────────────────────
+
+/**
+ * OCR 处理中的占位 popup —— 用户截完图后立刻弹出来「正在 OCR」，免得 PS 启动
+ * + WinRT 加载那 1-3 秒里桌面端死寂、用户以为程序挂了。OCR 出结果后由
+ * showPopup（成功）或 Notification（empty/failed）接管。
+ */
+function showOcrPlaceholder(x, y) {
+  if (!popupWindow || popupWindow.isDestroyed()) {
+    popupWindow = createPopupWindow()
+  }
+  popupPinned = false
+
+  popupWindow.webContents.send('popup:loading', { text: '', label: '正在 OCR…' })
+
+  const display = screen.getDisplayNearestPoint({ x, y })
+  const { bounds } = display
+  const winW = 360
+  const winH = 200
+
+  let posX = x + 16
+  let posY = y + 16
+  if (posX + winW > bounds.x + bounds.width)  posX = x - winW - 8
+  if (posY + winH > bounds.y + bounds.height) posY = y - winH - 8
+  posX = Math.max(bounds.x + 4, posX)
+  posY = Math.max(bounds.y + 4, posY)
+
+  popupWindow.setPosition(Math.round(posX), Math.round(posY))
+  popupWindow.setSize(winW, winH)
+  popupWindow.show()
 }
 
 // ─── IPC Handlers ─────────────────────────────────────────────────────────────
@@ -201,12 +243,15 @@ function registerIpcHandlers() {
     setSetting(key, String(value))
     if (key === 'hotkey')      updateHotkey(value)
     if (key === 'auto_select') setAutoSelect(value === '1' || value === true)
+    // OCR 快捷键单独返回注册结果，让 UI 能 surface「被占用」给用户
+    if (key === 'ocr_hotkey')  return { hotkeyRegistered: updateOcrHotkey(value) }
   })
 
   // 生词本
   ipcMain.handle('db:getWordbook', () => getWordbook())
   ipcMain.handle('db:addWord', (_, entry) => addWordToWordbook(entry))
   ipcMain.handle('db:deleteWord', (_, id) => deleteWordFromWordbook(id))
+  ipcMain.handle('db:resetWord', (_, id) => resetWord(id))
 
   // 术语表
   ipcMain.handle('db:getGlossary', () => getGlossary())
@@ -230,6 +275,27 @@ function registerIpcHandlers() {
   // 弹窗控制
   ipcMain.handle('popup:close', () => { popupWindow?.hide() })
   ipcMain.handle('popup:pin', (_, pinned) => { popupPinned = pinned })
+  // 渲染端测完真实内容高度后反馈过来，连同 renderer 算的目标宽度一起 setSize。
+  // clamp 高 [180,720] / 宽 [280,720]；setBounds 防出屏（默认锚左上角扩展，可能跑屏外）
+  ipcMain.handle('popup:setSize', (_, h, w) => {
+    if (!popupWindow || popupWindow.isDestroyed()) return
+    const clampedH = Math.max(180, Math.min(720, Math.ceil(Number(h) || 0)))
+    const requestedW = Math.max(280, Math.min(720, Math.ceil(Number(w) || 360)))
+    // 宽度只增不减：第一次渲染加宽后，layout 变窄了的高度不会让宽度再缩回去 →
+    // 避免「宽 640 算出 600 高 → 又请求 440 宽 → 又变窄又拉高」来回抖动
+    const [curW] = popupWindow.getSize()
+    const clampedW = Math.max(curW, requestedW)
+    const [x, y] = popupWindow.getPosition()
+    const display = screen.getDisplayMatching({ x, y, width: clampedW, height: clampedH })
+    const maxX = display.bounds.x + display.bounds.width  - clampedW - 4
+    const maxY = display.bounds.y + display.bounds.height - clampedH - 4
+    popupWindow.setBounds({
+      x: Math.max(display.bounds.x + 4, Math.min(x, maxX)),
+      y: Math.max(display.bounds.y + 4, Math.min(y, maxY)),
+      width: clampedW,
+      height: clampedH,
+    })
+  })
 
   // 自定义标题栏的窗口控制（min / max-restore / close / state）
   function senderWindow(e) {
@@ -288,6 +354,11 @@ app.whenReady().then(() => {
   // globally — every BrowserWindow we create afterwards inherits this.
   Menu.setApplicationMenu(null)
 
+  // Windows 通知（Notification）需要这个 ID 才能正确显示应用图标 + 在 Action
+  // Center 里归类到「翻译工具」名下；不设的话通知可能显示为 Electron 通用图标
+  // 或被 Windows 忽略。matches the appId in desktop/package.json build config.
+  app.setAppUserModelId('com.internal.translator-tool')
+
   initDatabase()
   initDictionary()
   registerIpcHandlers()
@@ -308,6 +379,31 @@ app.whenReady().then(() => {
 
   if (hookActive) enableHook()
 
+  // 截图 OCR 翻译：成功 → showPopup；中间状态/失败 surface 给用户
+  initOcr({
+    onText:       (text, x, y)   => showPopup({ text, x, y }),
+    onProcessing: (x, y)         => showOcrPlaceholder(x, y),
+    onEmpty:      ()             => {
+      popupWindow?.hide()
+      if (Notification.isSupported()) {
+        new Notification({ title: 'OCR', body: '没识别到文字 —— 换个更清晰的区域再试' }).show()
+      }
+    },
+    onFailed:     (errMsg)       => {
+      popupWindow?.hide()
+      if (Notification.isSupported()) {
+        new Notification({ title: 'OCR 失败', body: (errMsg || '未知错误').slice(0, 200) }).show()
+      }
+    },
+    hotkey: settings.ocr_hotkey || 'Alt+X',
+  })
+
+  // 生词本 SRS 调度器：到期单词弹 Notification + 自动晋级
+  // 用户点通知 → 显示主窗口并切到生词本 tab（语义对齐：通知说「复习」，点了就到列表）
+  initSrs({
+    onClick: () => showMainWindowAtTab('wordbook'),
+  })
+
   setupTray(app, mainWindow, {
     isHookEnabled,
     enableHook: () => {
@@ -320,7 +416,7 @@ app.whenReady().then(() => {
       setSetting('hook_enabled', '0')
       mainWindow?.webContents.send('hook:statusChanged', false)
     },
-  })
+  }, triggerOcrCapture, getCurrentHotkey)
 
   app.on('activate', () => { if (mainWindow) mainWindow.show() })
 })
@@ -328,6 +424,8 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   app.isQuiting = true
   destroyGlobalHook()
+  destroyOcr()
+  destroySrs()
   stopServer()
 })
 

@@ -58,11 +58,13 @@ export function initDatabase() {
   )
   const defaults = [
     ['hotkey', 'Alt+Z'],
+    ['ocr_hotkey', 'Alt+X'],
     ['popup_position', 'near_cursor'],
     ['theme', 'light'],
     ['auto_detect_lang', '1'],
     ['source_lang', 'en'],
     ['target_lang', 'zh'],
+    ['prompt_preset', 'general'],
     ['port', '27463'],
   ]
   for (const [key, value] of defaults) {
@@ -192,7 +194,26 @@ export function deleteGlossaryTerm(id) {
   getDb().prepare('DELETE FROM glossary WHERE id=?').run(id)
 }
 
-// ─── 生词本 ────────────────────────────────────────────────────────────────
+// ─── 生词本 + SRS（记忆曲线） ──────────────────────────────────────────────
+//
+// 单词分 5 个阶段（review_count 字段），间隔越来越长：
+//   stage 0(新) → 5min  → 1 → 30min → 2 → 1h → 3 → 6h → 4 → 12h → 5+ 毕业
+// 调度器（srs.js）每分钟扫到期单词、弹 Notification 并自动晋级。
+// 用户在生词本 UI 点「重置」可让某个单词回到 stage 0 重新循环。
+
+const SRS_INTERVALS_MS = [
+  5  * 60 * 1000,        // stage 0 → 5min
+  30 * 60 * 1000,        // stage 1 → 30min
+  60 * 60 * 1000,        // stage 2 → 1h
+  6  * 60 * 60 * 1000,   // stage 3 → 6h
+  12 * 60 * 60 * 1000,   // stage 4 → 12h
+]
+
+function nextReviewISO(stage) {
+  const interval = SRS_INTERVALS_MS[stage]
+  if (interval == null) return null   // stage 5+ 毕业，不再调度
+  return new Date(Date.now() + interval).toISOString()
+}
 
 export function getWordbook() {
   return getDb().prepare('SELECT * FROM wordbook ORDER BY added_at DESC').all()
@@ -202,8 +223,8 @@ export function addWordToWordbook(entry) {
   const { word, phonetic, definition, source_sentence, translation, source_url } = entry
   const result = getDb()
     .prepare(
-      `INSERT INTO wordbook (word, phonetic, definition, source_sentence, translation, source_url)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO wordbook (word, phonetic, definition, source_sentence, translation, source_url, next_review)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       word,
@@ -211,11 +232,43 @@ export function addWordToWordbook(entry) {
       definition || null,
       source_sentence || null,
       translation || null,
-      source_url || null
+      source_url || null,
+      nextReviewISO(0),   // 新词从 stage 0 起步，5 分钟后第一次复习
     )
   return { id: result.lastInsertRowid }
 }
 
 export function deleteWordFromWordbook(id) {
   getDb().prepare('DELETE FROM wordbook WHERE id=?').run(id)
+}
+
+// 查到期需复习的单词（next_review 非空且 <= 当前时间）
+export function getDueWords() {
+  const now = new Date().toISOString()
+  return getDb()
+    .prepare(`SELECT * FROM wordbook
+              WHERE next_review IS NOT NULL AND next_review <= ?
+              ORDER BY next_review LIMIT 10`)
+    .all(now)
+}
+
+// 晋级到下一阶段；返回新 stage + next_review（null = 毕业）
+export function advanceWord(id) {
+  const row = getDb().prepare('SELECT review_count FROM wordbook WHERE id = ?').get(id)
+  if (!row) return null
+  const newStage = (row.review_count || 0) + 1
+  const next = nextReviewISO(newStage)
+  getDb()
+    .prepare('UPDATE wordbook SET review_count = ?, next_review = ? WHERE id = ?')
+    .run(newStage, next, id)
+  return { stage: newStage, next_review: next }
+}
+
+// 重置到 stage 0（用户「忘了」/ 想重新走一遍循环）
+export function resetWord(id) {
+  const next = nextReviewISO(0)
+  getDb()
+    .prepare('UPDATE wordbook SET review_count = 0, next_review = ? WHERE id = ?')
+    .run(next, id)
+  return { stage: 0, next_review: next }
 }

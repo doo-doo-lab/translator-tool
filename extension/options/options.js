@@ -4,15 +4,9 @@
 (function () {
   const DEFAULTS = {
     port: 27463,
-    bilingualEnabled: true,
-    selectionEnabled: true,
-    aoauto: false,
   };
 
   const $port = document.getElementById('port');
-  const $bil  = document.getElementById('bilingualEnabled');
-  const $sel  = document.getElementById('selectionEnabled');
-  const $ao   = document.getElementById('aoauto');
   const $test = document.getElementById('test-conn');
   const $cs   = document.getElementById('conn-status');
   const $save = document.getElementById('save-btn');
@@ -37,15 +31,12 @@
   chrome.storage.local.get(Object.keys(DEFAULTS), (got) => {
     const v = { ...DEFAULTS, ...(got || {}) };
     $port.value  = v.port;
-    $bil.checked = !!v.bilingualEnabled;
-    $sel.checked = !!v.selectionEnabled;
-    $ao.checked  = !!v.aoauto;
     setStatus('已保存', true);
   });
 
   // ── Track changes ───────────────────────────────────────────────────────
   ['input', 'change'].forEach(evt => {
-    [$port, $bil, $sel, $ao].forEach(el =>
+    [$port].forEach(el =>
       el.addEventListener(evt, () => setStatus('未保存的更改', false))
     );
   });
@@ -56,9 +47,6 @@
     $port.value = port;
     const payload = {
       port,
-      bilingualEnabled: $bil.checked,
-      selectionEnabled: $sel.checked,
-      aoauto: $ao.checked,
     };
     $save.disabled = true;
     chrome.storage.local.set(payload, () => {

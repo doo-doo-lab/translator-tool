@@ -204,7 +204,12 @@ function Toast({ message, onDone }) {
 
 // ── GlossaryApp ──────────────────────────────────────────────────────────────
 
-function GlossaryApp() {
+// embedded=true 时是被 settings/App.jsx 当 tab 嵌入：
+//   - shell 高度由父容器决定（不用 100vh）
+//   - header / scrollArea padding 收紧
+//   - rail 的 maxHeight 不再绑 viewport
+//   - 不渲染底部黑色 footer bar（避免和 settings statusbar 撞）
+function GlossaryApp({ embedded = false } = {}) {
   const [entries,  setEntries]  = useState([])
   const [loading,  setLoading]  = useState(true)
   const [q,        setQ]        = useState('')
@@ -302,14 +307,19 @@ function GlossaryApp() {
     }
   }
 
+  const shellSt      = embedded ? {...st.shell,      height:'100%'} : st.shell
+  const headerSt     = embedded ? {...st.header,     padding:'20px 28px 12px'} : st.header
+  const scrollAreaSt = embedded ? {...st.scrollArea, padding:'0 28px 24px'} : st.scrollArea
+  const railSt       = embedded ? {...st.rail,       width:38, padding:'6px 8px 12px 0'} : st.rail
+  const railInnerSt  = embedded ? {...st.railInner,  maxHeight:'none'} : st.railInner
+
   return (
-    <div style={st.shell}>
+    <div style={shellSt}>
       {/* Header */}
-      <header style={st.header}>
+      <header style={headerSt}>
         <div style={st.headerLeft}>
-          <div style={st.eyebrow}><span style={st.eyebrowDot}/><span>Glossary</span></div>
-          <h1 style={st.h1}>Glossary</h1>
-          <p style={st.lede}>{loading ? '加载中…' : `术语表 · 显示 ${totalCount} / 共 ${entries.length} 条`}</p>
+          <h1 style={st.h1}>术语表</h1>
+          <p style={st.lede}>{loading ? '加载中…' : `显示 ${totalCount} / 共 ${entries.length} 条`}</p>
         </div>
 
         <div style={st.controls}>
@@ -324,7 +334,7 @@ function GlossaryApp() {
           <div style={{display:'flex',gap:8,alignItems:'center',justifyContent:'flex-end',flexWrap:'wrap'}}>
             {/* Category filter */}
             <div style={st.catFilters}>
-              {[['all','All'], ...allCategories.map(c => [c,c])].map(([id,label]) => {
+              {[['all','全部'], ...allCategories.map(c => [c,c])].map(([id,label]) => {
                 const active = catFilter === id
                 return (
                   <button key={id} type="button" onClick={() => setCatFilter(id)}
@@ -343,11 +353,11 @@ function GlossaryApp() {
 
       {/* Body */}
       <div style={st.bodyWrap}>
-        <main ref={scrollRef} onScroll={handleScroll} style={st.scrollArea} className="mc-scroll">
+        <main ref={scrollRef} onScroll={handleScroll} style={scrollAreaSt} className="mc-scroll">
           {/* Table head */}
           <div style={st.tableHead}>
-            <div>原文 Source</div>
-            <div>译文 Target</div>
+            <div>原文</div>
+            <div>译文</div>
             <div>分类</div>
             <div>备注</div>
             <div />
@@ -358,7 +368,7 @@ function GlossaryApp() {
               <div style={st.emptyTitle}>{loading ? '加载中…' : entries.length === 0 ? '术语表还没有内容' : '没有匹配的术语'}</div>
               <div style={st.emptyHint}>
                 {loading ? '正在读取数据库…'
-                  : entries.length === 0 ? '点右上角「+ Add Term」添加第一个术语，翻译时会自动注入到 prompt。'
+                  : entries.length === 0 ? '点右上角「+ 添加术语」添加第一个，翻译时会自动注入到 prompt。'
                   : '调整搜索关键词或分类筛选试试。'}
               </div>
               {!loading && entries.length === 0 && (
@@ -391,8 +401,8 @@ function GlossaryApp() {
         </main>
 
         {/* A-Z rail */}
-        <aside style={st.rail}>
-          <div style={st.railInner}>
+        <aside style={railSt}>
+          <div style={railInnerSt}>
             {allLetters.map(L => {
               const present = presentLetters.has(L)
               const active  = L === activeLetter && present
@@ -407,15 +417,17 @@ function GlossaryApp() {
         </aside>
       </div>
 
-      {/* Footer */}
-      <footer style={st.footer}>
-        <div style={st.footEyebrow}><span style={{...st.eyebrowDot,background:C.orange}}/><span>Glossary</span></div>
-        <div style={st.footStats}>
-          <div style={st.footStat}><div style={st.footStatNum}>{entries.length}</div><div style={st.footStatLabel}>Total terms</div></div>
-          <div style={st.footDivider}/>
-          <div style={st.footStat}><div style={st.footStatNum}>{allCategories.length}</div><div style={st.footStatLabel}>Categories</div></div>
-        </div>
-      </footer>
+      {/* Footer —— 嵌入模式不渲染（避免和 settings 的 status bar 撞色撞位） */}
+      {!embedded && (
+        <footer style={st.footer}>
+          <div style={st.footEyebrow}><span style={{...st.eyebrowDot,background:C.orange}}/><span>Glossary</span></div>
+          <div style={st.footStats}>
+            <div style={st.footStat}><div style={st.footStatNum}>{entries.length}</div><div style={st.footStatLabel}>Total terms</div></div>
+            <div style={st.footDivider}/>
+            <div style={st.footStat}><div style={st.footStatNum}>{allCategories.length}</div><div style={st.footStatLabel}>Categories</div></div>
+          </div>
+        </footer>
+      )}
 
       {/* Modals */}
       {modal && <TermModal initial={modal.data} onSave={handleSave} onClose={() => setModal(null)} />}
@@ -471,7 +483,7 @@ function AddButton({ onClick }) {
     <button type="button" onClick={onClick}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{...st.addBtn, background: hover ? C.orange : C.ink}}>
-      <PlusIcon /> <span>Add Term</span>
+      <PlusIcon /> <span>添加术语</span>
     </button>
   )
 }
@@ -479,7 +491,7 @@ function AddButton({ onClick }) {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const st = {
-  shell:      {height:'100vh',background:C.cream,fontFamily:FONT,color:C.ink,display:'flex',flexDirection:'column',overflow:'hidden'},
+  shell:      {height:'100%',minHeight:0,background:C.cream,fontFamily:FONT,color:C.ink,display:'flex',flexDirection:'column',overflow:'hidden'},
   header:     {display:'flex',alignItems:'flex-end',justifyContent:'space-between',gap:24,padding:'28px 48px 16px',flexWrap:'wrap'},
   headerLeft: {minWidth:240},
   eyebrow:    {display:'flex',alignItems:'center',gap:8,fontSize:14,fontWeight:700,letterSpacing:'0.04em',textTransform:'uppercase',color:C.ink},
@@ -490,12 +502,12 @@ const st = {
   searchPill: {display:'flex',alignItems:'center',gap:8,background:C.white,borderRadius:999,padding:'10px 16px',minWidth:280,boxShadow:SHADOW_SOFT},
   searchInput:{flex:1,border:'none',outline:'none',background:'transparent',fontFamily:FONT,fontSize:14,fontWeight:450,letterSpacing:'-0.01em',color:C.ink},
   clearBtn:   {width:20,height:20,borderRadius:'50%',background:C.cream,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0},
-  catFilters: {display:'flex',gap:4,background:C.white,borderRadius:999,padding:3,boxShadow:SHADOW_SOFT,flexWrap:'wrap'},
-  filterChip: {border:'none',borderRadius:999,padding:'5px 14px',fontFamily:FONT,fontSize:13,fontWeight:500,letterSpacing:'-0.01em',cursor:'pointer',transition:'background 0.15s ease, color 0.15s ease'},
+  catFilters: {display:'flex',gap:6,background:'transparent',padding:0,flexWrap:'wrap'},
+  filterChip: {border:'none',borderRadius:999,padding:'10px 20px',fontFamily:FONT,fontSize:14,fontWeight:500,letterSpacing:'-0.01em',cursor:'pointer',transition:'background 0.15s ease, color 0.15s ease',whiteSpace:'nowrap'},
   addBtn:     {display:'flex',alignItems:'center',gap:7,border:'none',borderRadius:999,padding:'10px 20px',fontFamily:FONT,fontSize:14,fontWeight:600,letterSpacing:'-0.01em',color:C.white,cursor:'pointer',transition:'background 0.15s ease',whiteSpace:'nowrap'},
   bodyWrap:   {flex:1,display:'flex',minHeight:0,position:'relative'},
   scrollArea: {flex:1,overflowY:'auto',overflowX:'hidden',padding:'0 48px 32px',minWidth:0},
-  tableHead:  {display:'grid',gridTemplateColumns:'1fr 1fr 100px 1fr 72px',gap:12,background:C.ink,color:C.cream,padding:'10px 18px',borderRadius:999,fontSize:12,fontWeight:700,letterSpacing:'0.04em',textTransform:'uppercase',position:'sticky',top:0,zIndex:5,boxShadow:SHADOW_LIFT,margin:'6px 0 14px'},
+  tableHead:  {display:'grid',gridTemplateColumns:'1fr 1fr 100px 1fr 72px',gap:12,background:C.creamLifted,color:C.slate,padding:'10px 18px',borderRadius:14,fontSize:12,fontWeight:700,letterSpacing:'0.04em',position:'sticky',top:0,zIndex:5,boxShadow:SHADOW_SOFT,margin:'6px 0 14px',border:`1px solid ${C.inkBorder10}`},
   group:      {marginTop:40},
   groupHeader:{position:'relative',height:56,marginBottom:6,display:'flex',alignItems:'flex-end',paddingLeft:4,paddingBottom:3,overflow:'visible'},
   groupGhost: {position:'absolute',bottom:-4,left:-12,fontSize:100,fontWeight:500,letterSpacing:'-0.04em',color:C.ghost,lineHeight:0.85,pointerEvents:'none',userSelect:'none',zIndex:0},
@@ -546,18 +558,26 @@ const st = {
   toast:      {position:'fixed',bottom:32,left:'50%',transform:'translateX(-50%)',background:C.ink,color:C.white,borderRadius:999,padding:'12px 24px',fontSize:14,fontWeight:500,letterSpacing:'-0.01em',boxShadow:SHADOW_LIFT,zIndex:300,pointerEvents:'none',whiteSpace:'nowrap'},
 }
 
-const tag = document.createElement('style')
-tag.textContent = `
-  @import url('https://fonts.googleapis.com/css2?family=Sofia+Sans:ital,wght@0,400;0,450;0,500;0,700;1,400&display=swap');
-  *{box-sizing:border-box} body,html{margin:0;padding:0}
-  .mc-scroll::-webkit-scrollbar{width:4px}
-  .mc-scroll::-webkit-scrollbar-thumb{background:${C.dust};border-radius:999px}
-  .mc-scroll::-webkit-scrollbar-track{background:transparent}
-  *::-webkit-scrollbar{width:4px} *::-webkit-scrollbar-thumb{background:${C.dust};border-radius:999px}
-  *::-webkit-scrollbar-track{background:transparent}
-  ::placeholder{color:${C.slate};opacity:1}
-  input:focus,textarea:focus{border-color:${C.ink}!important}
-`
-document.head.appendChild(tag)
+// 同 wordbook/index.jsx：独立 entry 才挂 createRoot + 注入全局 style，嵌入模式跳过。
+const __isStandaloneEntry =
+  typeof window !== 'undefined' &&
+  window.location?.pathname?.endsWith('/glossary/index.html')
 
-createRoot(document.getElementById('root')).render(<GlossaryApp />)
+if (__isStandaloneEntry) {
+  const tag = document.createElement('style')
+  tag.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Sofia+Sans:ital,wght@0,400;0,450;0,500;0,700;1,400&display=swap');
+    *{box-sizing:border-box} body,html{margin:0;padding:0}
+    .mc-scroll::-webkit-scrollbar{width:4px}
+    .mc-scroll::-webkit-scrollbar-thumb{background:${C.dust};border-radius:999px}
+    .mc-scroll::-webkit-scrollbar-track{background:transparent}
+    *::-webkit-scrollbar{width:4px} *::-webkit-scrollbar-thumb{background:${C.dust};border-radius:999px}
+    *::-webkit-scrollbar-track{background:transparent}
+    ::placeholder{color:${C.slate};opacity:1}
+    input:focus,textarea:focus{border-color:${C.ink}!important}
+  `
+  document.head.appendChild(tag)
+  createRoot(document.getElementById('root')).render(<GlossaryApp />)
+}
+
+export default GlossaryApp

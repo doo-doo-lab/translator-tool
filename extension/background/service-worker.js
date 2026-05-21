@@ -2,7 +2,7 @@
 // MV3 service worker — proxies all requests to the desktop HTTP server.
 //
 // Message types handled:
-//   TRANSLATE    { text, mode }          → POST /translate
+//   TRANSLATE    { text, mode, context } → POST /translate
 //   LOOKUP       { word }                → POST /lookup
 //   CHECK_STATUS {}                      → GET  /status
 //   ADD_WORD     { entry }               → POST /wordbook/add
@@ -44,7 +44,7 @@ async function safeFetch(path, options = {}, timeoutMs = 5000) {
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
-function handleTranslate({ text, mode = 'word' }) {
+function handleTranslate({ text, mode = 'word', context = '' }) {
   // Selection translations (word/sentence) need to feel snappy — a 15s
   // ceiling is plenty for short text and means a stuck LLM fails fast and
   // the popup shows a clear error instead of spinning for a minute and a
@@ -55,7 +55,7 @@ function handleTranslate({ text, mode = 'word' }) {
   return safeFetch('/translate', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ text, sourceLang: 'en', targetLang: 'zh', mode }),
+    body:    JSON.stringify({ text, sourceLang: 'en', targetLang: 'zh', mode, context }),
   }, timeoutMs).then(data => {
     // Desktop replies 200 with `{ translation: "", offline: true, error: ... }`
     // when the LLM call itself succeeded HTTP-wise but came back empty —

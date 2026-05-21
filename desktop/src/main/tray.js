@@ -4,11 +4,16 @@ import { join } from 'path'
 let tray = null
 
 /**
+ * 托盘只放「即时 actions」+「显示主窗口」+「退出」。
+ * 内容页（生词本 / 术语表）放在主窗口 sidebar，不在托盘开。
+ *
  * @param {Electron.App} app
  * @param {Electron.BrowserWindow} mainWindow
  * @param {{ isHookEnabled: () => boolean, enableHook: () => void, disableHook: () => void }} hookCtrl
+ * @param {() => void} onOcrCapture - 触发一次截图 OCR 翻译（快捷键与此菜单项共用）
+ * @param {() => string} getOcrHotkey - 拿当前 OCR 快捷键字符串，菜单 label 用它实时拼
  */
-export function setupTray(app, mainWindow, hookCtrl) {
+export function setupTray(app, mainWindow, hookCtrl, onOcrCapture, getOcrHotkey) {
   // 尝试加载图标，失败时使用空图标（开发阶段可接受）
   let icon = nativeImage.createEmpty()
   try {
@@ -41,7 +46,14 @@ export function setupTray(app, mainWindow, hookCtrl) {
       },
       { type: 'separator' },
       {
-        label: '打开设置',
+        // 实时拼当前 OCR 快捷键。注意快捷键能否真注册成功是另一回事
+        // （冲突时托盘菜单仍能用），通用设置那边会显示注册状态
+        label: 'OCR 截图翻译' + (getOcrHotkey ? `  ·  ${getOcrHotkey() || '未设置'}` : ''),
+        click: () => onOcrCapture?.(),
+      },
+      { type: 'separator' },
+      {
+        label: '打开主窗口',
         click: () => {
           mainWindow.show()
           mainWindow.focus()

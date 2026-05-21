@@ -251,6 +251,21 @@ body {
   min-height: 0;
 }
 
+/* wordbook / glossary 是自带 padding + 满 viewport 的独立设计页，
+   嵌入 tab 时让父 main-content 去掉 padding，否则视觉冗余 */
+.main-content--bleed {
+  padding: 0;
+}
+.embedded-view {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.embedded-view > * {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ─── Status bar (Ink Black footer) ─────────────────────────────────────── */
 .status-bar {
   margin-top: 12px;

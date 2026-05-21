@@ -7,6 +7,10 @@ const C = {
   inkBorder10:'rgba(20,20,19,0.10)', inkBorder20:'rgba(20,20,19,0.20)',
 }
 const FONT = "'Sofia Sans', Arial, sans-serif"
+
+// SRS 5 个阶段（review_count）配色 + 标签：stage 0 红 → 5 灰（毕业）
+const STAGE_COLORS = ['#E5484D', '#F37338', '#EAB308', '#3B82F6', '#16A34A', '#9CA3AF']
+const STAGE_LABELS = ['新',      '初熟',    '半熟',    '熟',      '稳',      '毕业']
 const SHADOW_CARD       = '0 16px 40px rgba(0,0,0,0.06)'
 const SHADOW_CARD_HOVER = '0 28px 56px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.04)'
 const SHADOW_SOFT       = '0 4px 16px rgba(0,0,0,0.08)'
@@ -84,7 +88,7 @@ function ExportMenu({ words }) {
         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         disabled={words.length === 0}
         style={{...st.exportBtn, background: hover&&words.length>0 ? C.ink : C.white, color: hover&&words.length>0 ? C.cream : C.ink, opacity: words.length===0 ? 0.4 : 1, cursor: words.length===0 ? 'not-allowed' : 'pointer'}}>
-        <DownloadIcon /><span>Export</span>
+        <DownloadIcon /><span>导出</span>
       </button>
       {open && (
         <div style={st.dropdown}>
@@ -131,19 +135,27 @@ function ConfirmDialog({ word, onConfirm, onCancel }) {
 
 // ── WordCard ─────────────────────────────────────────────────────────────────
 
-function WordCard({ entry, onDelete }) {
+function WordCard({ entry, onDelete, onReset }) {
   const [hover,setHover]     = useState(false)
   const [delH,setDelH]       = useState(false)
+  const [resetH,setResetH]   = useState(false)
   const [confirm,setConfirm] = useState(false)
 
   const defs   = (entry.definition||entry.translation||'').split(/\n|；|;/).map(s=>s.trim()).filter(Boolean).slice(0,2)
   const posSet = [...new Set((entry.definition||'').match(/\b(n|v|vt|vi|adj|adv|prep|conj|pron|num)\./g)||[])]
 
+  const stage      = Math.min(entry.review_count || 0, 5)
+  const stageColor = STAGE_COLORS[stage]
+  const stageLabel = STAGE_LABELS[stage]
+
   return (
     <>
       <article
-        onMouseEnter={() => setHover(true)} onMouseLeave={() => {setHover(false);setDelH(false)}}
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => {setHover(false);setDelH(false);setResetH(false)}}
         style={{...st.card, transform: hover?'translateY(-4px)':'translateY(0)', boxShadow: hover?SHADOW_CARD_HOVER:SHADOW_CARD}}>
+
+        <div title={`${stageLabel} 阶段（review_count = ${entry.review_count || 0}）`}
+             style={{...st.stageChip, background: stageColor}} />
 
         <button type="button" onClick={() => setConfirm(true)}
           onMouseEnter={() => setDelH(true)} onMouseLeave={() => setDelH(false)}
@@ -174,6 +186,12 @@ function WordCard({ entry, onDelete }) {
         )}
 
         <div style={st.cardFooter}>
+          <button type="button" onClick={() => onReset?.(entry.id)}
+            onMouseEnter={() => setResetH(true)} onMouseLeave={() => setResetH(false)}
+            title={stage >= 5 ? '已毕业 · 点重置重新加入复习循环' : '回到 stage 0 重新走一轮记忆曲线'}
+            style={{...st.resetBtn, background: resetH?C.ink:'transparent', color: resetH?C.cream:C.slate, opacity: hover?1:0.55}}>
+            重置
+          </button>
           {entry.added_at && <span style={st.cardDate}>{new Date(entry.added_at).toLocaleDateString('zh-CN',{month:'short',day:'numeric'})}</span>}
         </div>
       </article>
@@ -200,7 +218,6 @@ function EmptyState({ q, loading }) {
         <circle cx="170" cy="38" r="4" fill={C.orange} />
         <circle cx="10"  cy="88" r="4" fill={C.orange} />
       </svg>
-      <div style={st.emptyEyebrow}><span style={st.eyebrowDot} /><span>Empty</span></div>
       <div style={st.emptyTitle}>{loading?'加载中…':q?'没有匹配的生词':'生词本还是空的'}</div>
       <div style={st.emptyHint}>{loading?'正在读取数据库…':q?`没有找到包含「${q}」的单词，换个关键词试试。`:'在翻译弹窗中点「加入生词本」，单词会出现在这里。'}</div>
     </div>
@@ -209,7 +226,10 @@ function EmptyState({ q, loading }) {
 
 // ── WordbookApp ──────────────────────────────────────────────────────────────
 
-function WordbookApp() {
+// embedded=true 时是被 settings/App.jsx 当 tab 嵌入，宽度比独立窗口窄、
+// 高度由父 main-content 决定 —— 走更紧凑的 padding，不渲染底部黑色 footer bar
+// （避免和 settings 自带的 statusbar 视觉冲突）
+function WordbookApp({ embedded = false } = {}) {
   const [words,setWords]     = useState([])
   const [loading,setLoading] = useState(true)
   const [q,setQ]             = useState('')
@@ -243,12 +263,30 @@ function WordbookApp() {
     }
   }
 
+  const handleReset = async (id) => {
+    const w = words.find(x => x.id === id)
+    try {
+      const result = await window.electronAPI?.resetWord(id)
+      // 本地更新 stage + next_review，避免再 fetch 全表
+      setWords(ws => ws.map(x => x.id === id
+        ? { ...x, review_count: 0, next_review: result?.next_review ?? x.next_review }
+        : x))
+      setToast(`已重置「${w?.word||''}」到 stage 0`)
+    } catch(e) {
+      console.error(e)
+      setToast('重置失败，请重试')
+    }
+  }
+
+  const shellSt  = embedded ? {...st.shell,  minHeight:'100%'} : st.shell
+  const headerSt = embedded ? {...st.header, padding:'24px 28px 14px'} : st.header
+  const bodySt   = embedded ? {...st.body,   padding:'4px 28px 24px'} : st.body
+
   return (
-    <div style={st.shell}>
-      <header style={st.header}>
+    <div style={shellSt}>
+      <header style={headerSt}>
         <div>
-          <div style={st.eyebrow}><span style={st.eyebrowDot} /><span>Wordbook</span></div>
-          <h1 style={st.h1}>My Wordbook</h1>
+          <h1 style={st.h1}>我的生词本</h1>
           <p style={st.lede}>收藏的单词与短语 · 共 <strong style={{fontWeight:500}}>{words.length}</strong> 条</p>
         </div>
 
@@ -264,21 +302,23 @@ function WordbookApp() {
         </div>
       </header>
 
-      <main style={st.body}>
+      <main style={bodySt}>
         {loading || filtered.length === 0
           ? <EmptyState q={q.trim()} loading={loading} />
-          : <div style={st.grid}>{filtered.map(e => <WordCard key={e.id} entry={e} onDelete={handleDelete} />)}</div>
+          : <div style={st.grid}>{filtered.map(e => <WordCard key={e.id} entry={e} onDelete={handleDelete} onReset={handleReset} />)}</div>
         }
       </main>
 
-      <footer style={st.footer}>
-        <div style={st.footEyebrow}><span style={{...st.eyebrowDot,background:C.orange}} /><span>Vocabulary</span></div>
-        <div style={st.footStats}>
-          <div style={st.footStat}><div style={st.footStatNum}>{words.length}</div><div style={st.footStatLabel}>Total words</div></div>
-          <div style={st.footDivider} />
-          <div style={st.footStat}><div style={st.footStatNum}>{filtered.length}</div><div style={st.footStatLabel}>Showing</div></div>
-        </div>
-      </footer>
+      {!embedded && (
+        <footer style={st.footer}>
+          <div style={st.footEyebrow}><span style={{...st.eyebrowDot,background:C.orange}} /><span>Vocabulary</span></div>
+          <div style={st.footStats}>
+            <div style={st.footStat}><div style={st.footStatNum}>{words.length}</div><div style={st.footStatLabel}>Total words</div></div>
+            <div style={st.footDivider} />
+            <div style={st.footStat}><div style={st.footStatNum}>{filtered.length}</div><div style={st.footStatLabel}>Showing</div></div>
+          </div>
+        </footer>
+      )}
 
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
@@ -286,7 +326,7 @@ function WordbookApp() {
 }
 
 const st = {
-  shell:       {minHeight:'100vh',background:C.cream,fontFamily:FONT,color:C.ink,display:'flex',flexDirection:'column',position:'relative'},
+  shell:       {minHeight:'100%',background:C.cream,fontFamily:FONT,color:C.ink,display:'flex',flexDirection:'column',position:'relative'},
   header:      {display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:20,padding:'36px 48px 20px',flexWrap:'wrap'},
   eyebrow:     {display:'flex',alignItems:'center',gap:8,fontSize:14,fontWeight:700,letterSpacing:'0.04em',textTransform:'uppercase',color:C.ink},
   eyebrowDot:  {width:6,height:6,borderRadius:'50%',background:C.orange,display:'inline-block'},
@@ -301,6 +341,7 @@ const st = {
   body:        {flex:1,padding:'4px 48px 40px'},
   grid:        {display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))',gap:18},
   card:        {position:'relative',background:C.creamLifted,borderRadius:36,padding:'24px 24px 16px',boxShadow:SHADOW_CARD,transition:'transform 0.2s ease, box-shadow 0.2s ease',overflow:'hidden',display:'flex',flexDirection:'column'},
+  stageChip:   {position:'absolute',top:18,left:18,width:10,height:10,borderRadius:'50%',boxShadow:'0 0 0 2px rgba(255,255,255,0.7)'},
   delBtn:      {position:'absolute',top:14,right:14,width:36,height:36,borderRadius:'50%',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',boxShadow:SHADOW_SOFT,transition:'background 0.15s ease, opacity 0.15s ease',padding:0},
   cardWord:    {margin:0,fontSize:24,fontWeight:500,letterSpacing:'-0.02em',color:C.ink,lineHeight:1.1,paddingRight:48,wordBreak:'break-word'},
   cardPhonetic:{marginTop:5,fontSize:14,fontWeight:450,letterSpacing:'-0.01em',color:C.slate},
@@ -311,8 +352,9 @@ const st = {
   defBullet:   {width:5,height:5,borderRadius:'50%',background:C.orange,marginTop:8,flexShrink:0},
   sentenceBlock:{marginTop:12,paddingTop:10,borderTop:`1px solid ${C.inkBorder10}`},
   sentenceText: {fontSize:12,fontWeight:450,letterSpacing:'-0.01em',color:C.slate,lineHeight:1.45,fontStyle:'italic'},
-  cardFooter:  {marginTop:'auto',paddingTop:10,display:'flex',justifyContent:'flex-end'},
+  cardFooter:  {marginTop:'auto',paddingTop:10,display:'flex',alignItems:'center',justifyContent:'space-between',gap:10},
   cardDate:    {fontSize:11,fontWeight:450,letterSpacing:'-0.01em',color:C.slate},
+  resetBtn:    {border:'none',borderRadius:999,padding:'4px 10px',fontFamily:FONT,fontSize:11,fontWeight:500,letterSpacing:'-0.01em',cursor:'pointer',transition:'background 0.15s ease, color 0.15s ease, opacity 0.15s ease'},
   empty:       {minHeight:360,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',textAlign:'center',padding:'40px 32px',gap:10},
   emptyEyebrow:{marginTop:4,display:'flex',alignItems:'center',gap:8,fontSize:13,fontWeight:700,letterSpacing:'0.04em',textTransform:'uppercase',color:C.slate},
   emptyTitle:  {fontSize:22,fontWeight:500,letterSpacing:'-0.02em',color:C.ink},
@@ -334,14 +376,25 @@ const st = {
   toast:       {position:'fixed',bottom:32,left:'50%',transform:'translateX(-50%)',background:C.ink,color:C.white,borderRadius:999,padding:'12px 24px',fontSize:14,fontWeight:500,letterSpacing:'-0.01em',boxShadow:SHADOW_LIFT,zIndex:300,pointerEvents:'none',whiteSpace:'nowrap'},
 }
 
-const tag = document.createElement('style')
-tag.textContent = `
-  @import url('https://fonts.googleapis.com/css2?family=Sofia+Sans:ital,wght@0,400;0,450;0,500;0,700;1,400&display=swap');
-  *{box-sizing:border-box} body,html{margin:0;padding:0}
-  *::-webkit-scrollbar{width:6px;height:6px}
-  *::-webkit-scrollbar-thumb{background:rgba(20,20,19,0.15);border-radius:999px}
-  *::-webkit-scrollbar-track{background:transparent}
-  ::placeholder{color:#696969;opacity:1}
-`
-document.head.appendChild(tag)
-createRoot(document.getElementById('root')).render(<WordbookApp />)
+// Module 既能作为独立窗口 entry 加载 (createRoot 自挂)，也能被 settings/App.jsx
+// import 当 tab 嵌入。判断方式：URL 以 wordbook/index.html 结尾就是独立 entry。
+// 嵌入模式下不注入全局 style（避免污染父文档），样式靠 settings/styles.css 兜底。
+const __isStandaloneEntry =
+  typeof window !== 'undefined' &&
+  window.location?.pathname?.endsWith('/wordbook/index.html')
+
+if (__isStandaloneEntry) {
+  const tag = document.createElement('style')
+  tag.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Sofia+Sans:ital,wght@0,400;0,450;0,500;0,700;1,400&display=swap');
+    *{box-sizing:border-box} body,html{margin:0;padding:0}
+    *::-webkit-scrollbar{width:6px;height:6px}
+    *::-webkit-scrollbar-thumb{background:rgba(20,20,19,0.15);border-radius:999px}
+    *::-webkit-scrollbar-track{background:transparent}
+    ::placeholder{color:#696969;opacity:1}
+  `
+  document.head.appendChild(tag)
+  createRoot(document.getElementById('root')).render(<WordbookApp />)
+}
+
+export default WordbookApp

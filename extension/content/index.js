@@ -14,8 +14,6 @@
 //     Display mode when translation runs.
 //       true  → 双语对照 (source + translation both visible)
 //       false → 仅显示译文 (replace mode — source hidden via CSS)
-//   hoverEnabled (bool, default false)
-//     Ctrl+' on hover triggers single-paragraph translate.
 //
 // Note: 启用翻译 (the popup's per-page toggle) is intentionally NOT persisted —
 // it represents "is this page actively translating right now". Initialised
@@ -76,7 +74,7 @@
   // and boot without requiring a page reload.
   function tryBoot() {
     chrome.storage.local.get(
-      { extensionEnabled: true, bilingualEnabled: true, hoverEnabled: false },
+      { extensionEnabled: true, bilingualEnabled: true },
       prefs => {
         if (prefs.extensionEnabled === false) return;
         // Check desktop server is up before booting — otherwise the
@@ -88,9 +86,6 @@
             const siteVal = sitePrefs[getSiteKey()];
             if (siteVal !== false && !bilingualActive) {
               bootBilingual(modeFromBool(prefs.bilingualEnabled));
-            }
-            if (window.ttBilingual?.setHover) {
-              window.ttBilingual.setHover(prefs.hoverEnabled);
             }
           });
         });
@@ -149,10 +144,6 @@
       if (bilingualActive) {
         window.ttBilingual.setDisplayMode?.(mode);
       }
-    }
-
-    if (msg.type === 'TOGGLE_HOVER') {
-      window.ttBilingual?.setHover?.(msg.enabled);
     }
 
     if (msg.type === 'TOGGLE_SITE') {

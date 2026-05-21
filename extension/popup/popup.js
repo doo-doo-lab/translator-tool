@@ -10,7 +10,6 @@
   const tExt         = document.getElementById('toggleExtension');
   const tEnabled     = document.getElementById('toggleEnabled');
   const tBi          = document.getElementById('toggleBilingual');
-  const tHover       = document.getElementById('toggleHover');
   const tSite        = document.getElementById('toggleSite');
   const retryBtn     = document.getElementById('retryBtn');
   const settingsBtn  = document.getElementById('openSettings');
@@ -102,14 +101,13 @@
 
     const prefs = await new Promise(resolve =>
       chrome.storage.local.get(
-        ['extensionEnabled', 'bilingualEnabled', 'hoverEnabled'],
+        ['extensionEnabled', 'bilingualEnabled'],
         resolve
       )
     );
     const extensionOn = prefs.extensionEnabled !== false;  // default ON
     renderToggle(tExt,   extensionOn);
     renderToggle(tBi,    prefs.bilingualEnabled ?? true);
-    renderToggle(tHover, prefs.hoverEnabled     ?? false);
     applyMasterLock(extensionOn);
 
     // Per-site toggle: undefined = default ON (translate by default).
@@ -159,13 +157,6 @@
     renderToggle(tBi, next);
     await new Promise(r => chrome.storage.local.set({ bilingualEnabled: next }, r));
     sendToTab({ type: 'TOGGLE_BILINGUAL', enabled: next });
-  });
-
-  tHover.addEventListener('click', async () => {
-    const next = !tHover.classList.contains('on');
-    renderToggle(tHover, next);
-    await new Promise(r => chrome.storage.local.set({ hoverEnabled: next }, r));
-    sendToTab({ type: 'TOGGLE_HOVER', enabled: next });
   });
 
   // 翻译此网站 — persistent per-host preference. Flipping it cascades into
